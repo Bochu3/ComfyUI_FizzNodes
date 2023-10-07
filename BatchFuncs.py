@@ -9,6 +9,31 @@ import re
 
 from .ScheduleFuncs import addWeighted, check_is_number, parse_weight, prepare_prompt
 
+def pad_conditioning_tensors_to_same_length(conditionings: List[torch.Tensor], emptystring_conditioning: torch.Tensor
+                                                 ) -> List[torch.Tensor]:
+        if not all([len(c.shape) in [2, 3] for c in conditionings]):
+            raise ValueError("Conditioning tensors must all have either 2 dimensions (unbatched) or 3 dimensions (batched)")
+         
+        # ensure all conditioning tensors are 3 dimensions
+        conditionings = [c.unsqueeze(0) if len(c.shape) == 2 else c for c in conditionings]
+        c0_shape = conditionings[0].shape
+
+        if not all([c.shape[0] == c0_shape[0] and c.shape[2] == c0_shape[2] for c in conditionings]):
+            raise ValueError(f"All conditioning tensors must have the same batch size ({c0_shape[0]}) and number of embeddings per token ({c0_shape[1]}")
+        
+        if len(emptystring_conditioning.shape) == 2:
+            emptystring_conditioning = emptystring_conditioning.unsqueeze(0)
+        elif len(emptystring_conditioning.shape) == 1:
+            emptystring_conditioning = emptystring_conditioning.unsqueeze(0).unsqueeze(0)
+        empty_z = torch.cat([emptystring_conditioning] * c0_shape[0])
+        max_token_count = max([c.shape[1] for c in conditionings])
+        # if necessary, pad shorter tensors out with an emptystring tensor
+        for i, c in enumerate(conditionings):
+            while c.shape[1] < max_token_count:
+                c = torch.cat([c, empty_z], dim=1)
+                conditionings[i] = c
+        return conditionings
+
 def prepare_batch_prompt(prompt_series, max_frames, frame_idx, prompt_weight_1=0, prompt_weight_2=0, prompt_weight_3=0,
                          prompt_weight_4=0):  # calculate expressions from the text input and return a string
     max_f = max_frames - 1
@@ -141,7 +166,9 @@ def interpolate_prompt_series(animation_prompts, max_frames, pre_text, app_text,
 def BatchPoolAnimConditioning(cur_prompt_series, nxt_prompt_series, weight_series, clip):
     pooled_out = []
     cond_out = []
-
+    tokens = clip.tokenize(str(''))
+    cond_empty = clip.encode_from_tokens(tokens, return_pooled=False)
+    interpolated_cond_empty = cond_empty[0][0]
     for i in range(len(cur_prompt_series)):
         tokens = clip.tokenize(str(cur_prompt_series[i]))
         cond_to, pooled_to = clip.encode_from_tokens(tokens, return_pooled=True)
@@ -158,6 +185,8 @@ def BatchPoolAnimConditioning(cur_prompt_series, nxt_prompt_series, weight_serie
 
         pooled_out.append(interpolated_pooled)
         cond_out.append(interpolated_cond)
+
+    cond_out = pad_conditioning_tensors_to_same_length(cond_out, interpolated_cond_empty)
 
     final_pooled_output = torch.cat(pooled_out, dim=0)
     final_conditioning = torch.cat(cond_out, dim=0)
