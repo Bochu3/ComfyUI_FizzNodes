@@ -1,6 +1,7 @@
 # These nodes were made using code from the Deforum extension for A1111 webui
 # You can find the project here: https://github.com/deforum-art/sd-webui-deforum
 
+from typing import List
 import numexpr
 import torch
 import numpy as np
